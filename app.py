@@ -3,13 +3,12 @@ import gspread
 from google.oauth2.service_account import Credentials
 from google import genai
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- 1. SETUP & SECRETS ---
 API_KEY = st.secrets["GEMINI_KEY"]
 GOOGLE_CREDS = st.secrets["GOOGLE_CREDS"]
 
-# Connect to Gemini 3
 client = genai.Client(api_key=API_KEY)
 
 # Connect to Google Sheets
@@ -21,39 +20,35 @@ ss = gc.open("My_AI_Finance_Manager")
 st.set_page_config(page_title="AI Money Assistant", page_icon="💰")
 st.title("💰 AI Money Assistant")
 
-# Memory management for conversation follow-ups
 if "interaction_id" not in st.session_state:
     st.session_state.interaction_id = None
 
-# Input area
 user_input = st.text_area("✍️ Paste your full list of transactions:", height=200, 
-                         placeholder="e.g. 45 for metro, tomato for 25, 5 lakh loan at 9.5%, Roy paid back 500...")
+                         placeholder="e.g. 45 for metro, lent 500 to Roy, 5 lakh loan...")
 
-if st.button("🚀 Process & Save Every Item"):
+if st.button("🚀 Process & Save Everything"):
     if user_input:
-        st.info("AI is performing a meticulous audit to ensure all items are recorded...")
+        today = datetime.now().strftime("%Y-%m-%d")
+        default_due = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
         
-        # SYSTEM PROMPT: Forces zero-loss itemization and loan math
-        system_msg = """
-        You are a meticulous financial auditor. 
+        st.info("AI is auditing entries and calculating due dates...")
+        
+        system_msg = f"""
+        Today is {today}. Default Due Date is {default_due}.
         Break down EVERY SINGLE transaction into a separate JSON object in a list. 
-        DO NOT summarize. If there are 5 expenses, create 5 objects.
         
-        Tabs:
+        TABS & RULES:
         1. 'Transactions': [Date, Description, Amount, Category, Type]
         2. 'Friends_Debt': [Date, FriendName, Amount, Description, DueDate, Status]
+           - RULE: If no due date is mentioned, use the default: {default_due}.
+           - If they 'gave back', Status is 'Paid'. If you 'lent', Status is 'Pending'.
         3. 'Loans_and_Savings': [Goal/Loan Name, TargetAmount, CurrentBalance, EMIAmount, Status]
+           - Use High-Thinking to calculate EMI if % and years are provided.
         
-        LOGIC:
-        - For 'gave back' or 'owed', use 'Friends_Debt'. Status='Paid' if they gave it back.
-        - For Loans with % interest: CALCULATE the EMI using standard formula.
-        - For EMIs with 'months left': Calculate Total and Balance.
-        
-        Return ONLY a JSON list: [{"tab": "...", "row": [...]}, ...]
+        Return ONLY a JSON list: [{{"tab": "...", "row": [...]}}, ...]
         """
 
         try:
-            # High Thinking for the 5-lakh loan math
             interaction = client.interactions.create(
                 model="gemini-3-flash-preview",
                 input=user_input,
@@ -72,18 +67,15 @@ if st.button("🚀 Process & Save Every Item"):
                 response_text = response_text.split("```json")[1].split("```")[0].strip()
             
             data_entries = json.loads(response_text)
-            if isinstance(data_entries, dict): 
-                data_entries = [data_entries]
+            if isinstance(data_entries, dict): data_entries = [data_entries]
 
-            # SAVE EVERY ROW ONE BY ONE
             saved_count = 0
             for entry in data_entries:
                 ws = ss.worksheet(entry['tab'])
-                # Convert all values to string to prevent Error 400
                 ws.append_row([str(x) for x in entry['row']])
                 saved_count += 1
             
-            st.success(f"✅ Successfully recorded {saved_count} items into your sheet!")
+            st.success(f"✅ Successfully recorded {saved_count} items!")
             st.balloons()
 
         except Exception as e:
