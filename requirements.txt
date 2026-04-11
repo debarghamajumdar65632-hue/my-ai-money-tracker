@@ -1,3 +1,6 @@
-google-genai
+streamlit
+pandas
+plotly
 gspread
 google-auth
+google-genai
