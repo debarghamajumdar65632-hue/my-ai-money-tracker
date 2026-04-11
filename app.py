@@ -74,7 +74,11 @@ if st.button("🚀 Save to Tracker"):
 
             # Save to sheet
             target_tab = ss.worksheet(suggested_tab)
-            target_tab.append_row(result['row'])
+            
+            # We convert everything to a string (text) to prevent the [400] error
+            row_to_save = [str(item) for item in result['row']]
+            
+            target_tab.append_row(row_to_save)
             
             st.success(f"✅ Saved to {suggested_tab}!")
             st.balloons()
