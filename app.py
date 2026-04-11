@@ -5,11 +5,11 @@ from google import genai
 import json
 from datetime import datetime
 
-# --- 1. SETUP ---
+# --- 1. SETUP & SECRETS ---
 API_KEY = st.secrets["GEMINI_KEY"]
 GOOGLE_CREDS = st.secrets["GOOGLE_CREDS"]
 
-# Connect to Gemini 3 Brain (Interactions API)
+# Connect to Gemini 3
 client = genai.Client(api_key=API_KEY)
 
 # Connect to Google Sheets
@@ -18,71 +18,77 @@ creds = Credentials.from_service_account_info(json.loads(GOOGLE_CREDS), scopes=s
 gc = gspread.authorize(creds)
 ss = gc.open("My_AI_Finance_Manager")
 
-st.set_page_config(page_title="AI Finance Assistant", page_icon="💰")
+st.set_page_config(page_title="AI Money Assistant", page_icon="💰")
 st.title("💰 AI Money Assistant")
 
+# Memory management for conversation follow-ups
 if "interaction_id" not in st.session_state:
     st.session_state.interaction_id = None
 
-user_input = st.text_input("Enter details (e.g., '500,000 loan @ 9.5% for 7 years'):")
+# Input area
+user_input = st.text_area("✍️ Paste your full list of transactions:", height=200, 
+                         placeholder="e.g. 45 for metro, tomato for 25, 5 lakh loan at 9.5%, Roy paid back 500...")
 
-if st.button("🚀 Process & Calculate"):
+if st.button("🚀 Process & Save Every Item"):
     if user_input:
+        st.info("AI is performing a meticulous audit to ensure all items are recorded...")
+        
+        # SYSTEM PROMPT: Forces zero-loss itemization and loan math
         system_msg = """
-        You are a financial calculator. 
-        If a user provides a loan amount, interest rate, and time, you MUST calculate the Monthly EMI.
+        You are a meticulous financial auditor. 
+        Break down EVERY SINGLE transaction into a separate JSON object in a list. 
+        DO NOT summarize. If there are 5 expenses, create 5 objects.
         
-        Formula: [P x R x (1+R)^N]/[(1+R)^N-1]
+        Tabs:
+        1. 'Transactions': [Date, Description, Amount, Category, Type]
+        2. 'Friends_Debt': [Date, FriendName, Amount, Description, DueDate, Status]
+        3. 'Loans_and_Savings': [Goal/Loan Name, TargetAmount, CurrentBalance, EMIAmount, Status]
         
-        Return ONLY JSON:
-        {
-          "tab": "Loans_and_Savings",
-          "row": [LoanName, Principal, CurrentBalance, CalculatedEMI, Status_with_Interest_Rate]
-        }
+        LOGIC:
+        - For 'gave back' or 'owed', use 'Friends_Debt'. Status='Paid' if they gave it back.
+        - For Loans with % interest: CALCULATE the EMI using standard formula.
+        - For EMIs with 'months left': Calculate Total and Balance.
+        
+        Return ONLY a JSON list: [{"tab": "...", "row": [...]}, ...]
         """
 
         try:
-            # Added thinking_summaries="auto" for better visibility [cite: 1168, 1179]
+            # High Thinking for the 5-lakh loan math
             interaction = client.interactions.create(
                 model="gemini-3-flash-preview",
                 input=user_input,
                 system_instruction=system_msg,
                 previous_interaction_id=st.session_state.interaction_id,
                 generation_config={
-                    "thinking_level": "high", # [cite: 1158]
-                    "thinking_summaries": "auto", # [cite: 1169]
+                    "thinking_level": "high",
                     "temperature": 0.1
                 }
             )
             
             st.session_state.interaction_id = interaction.id
+            response_text = interaction.outputs[-1].text.strip()
             
-            # Look for both reasoning summaries and text outputs [cite: 1182, 1183]
-            for output in interaction.outputs:
-                if output.type == "thought":
-                    with st.expander("📝 AI Thinking Process"):
-                        st.write(output.summary) # 
-                
-                elif output.type == "text":
-                    response_text = output.text.strip()
-                    if "{" in response_text and '"tab"' in response_text:
-                        if "```json" in response_text:
-                            response_text = response_text.split("```json")[1].split("```")[0].strip()
-                        
-                        result = json.loads(response_text)
-                        ws = ss.worksheet(result['tab'])
-                        # Always convert to string to prevent API Errors [cite: 46]
-                        ws.append_row([str(x) for x in result['row']])
-                        
-                        st.success(f"✅ Calculation Complete & Saved to {result['tab']}!")
-                        st.write(f"**Monthly EMI:** {result['row'][3]}")
-                        st.balloons()
-                    else:
-                        st.info(f"🤖 AI: {response_text}")
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0].strip()
+            
+            data_entries = json.loads(response_text)
+            if isinstance(data_entries, dict): 
+                data_entries = [data_entries]
+
+            # SAVE EVERY ROW ONE BY ONE
+            saved_count = 0
+            for entry in data_entries:
+                ws = ss.worksheet(entry['tab'])
+                # Convert all values to string to prevent Error 400
+                ws.append_row([str(x) for x in entry['row']])
+                saved_count += 1
+            
+            st.success(f"✅ Successfully recorded {saved_count} items into your sheet!")
+            st.balloons()
 
         except Exception as e:
             st.error(f"❌ Error: {e}")
 
-if st.button("🔄 Reset"):
+if st.button("🔄 Reset Conversation"):
     st.session_state.interaction_id = None
     st.rerun()
