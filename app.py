@@ -4,9 +4,10 @@ import plotly.express as px
 import gspread
 from google.oauth2.service_account import Credentials
 from google import genai
+from PIL import Image # For image handling
 import json
 from datetime import datetime, timedelta
-import pytz # Added for timezone handling
+import pytz 
 
 # --- 1. SETUP & SECRETS ---
 API_KEY = st.secrets["GEMINI_KEY"]
@@ -30,30 +31,46 @@ except Exception as e:
 st.set_page_config(page_title="AI Money Assistant", page_icon="💰", layout="wide")
 
 # --- 2. DYNAMIC DATE LOGIC ---
-# Get current time in India (IST) instead of server time (UTC)
 IST = pytz.timezone('Asia/Kolkata')
 today_ist = datetime.now(IST)
 today_str = today_ist.strftime("%Y-%m-%d")
 
 # --- 3. SIDEBAR ---
 st.sidebar.title("💰 AI Finance Menu")
-st.sidebar.info(f"📅 Local Date: {today_str}") # Shows you what date the AI is using
+st.sidebar.info(f"📅 Local Date: {today_str}")
 page = st.sidebar.radio("Go to", ["Data Entry", "Financial Intelligence"])
 
 # --- 4. PAGE: DATA ENTRY ---
 if page == "Data Entry":
-    st.title("✍️ Smart Transaction Entry")
+    st.title("✍️ Smart Entry (Text or Photo)")
     
-    user_input = st.text_area("Paste transactions:", height=200, placeholder="e.g. spent 200 on dinner...")
+    # NEW: Image Uploader
+    uploaded_file = st.file_uploader("📸 Upload a Bill, Screenshot, or Receipt", type=["jpg", "jpeg", "png", "webp"])
+    
+    if uploaded_file:
+        st.image(uploaded_file, caption="Uploaded Document", width=300)
 
-    if st.button("🚀 Process & Save"):
-        if user_input:
-            default_due = (today_ist + timedelta(days=7)).strftime("%Y-%m-%d")
-            st.info(f"🤖 AI is processing for date: {today_str}")
+    user_input = st.text_area("Or paste text here:", height=100, placeholder="e.g. spent 200 on dinner...")
+
+    if st.button("🚀 Process & Save Everything"):
+        if user_input or uploaded_file:
+            st.info("🤖 AI is analyzing your input...")
+            
+            # Prepare contents for Gemini
+            contents = []
+            if user_input:
+                contents.append(user_input)
+            if uploaded_file:
+                img = Image.open(uploaded_file)
+                contents.append(img)
             
             system_msg = f"""
             CRITICAL: Today's date is EXACTLY {today_str}. 
-            If the user says 'today', 'yesterday' (which would be {(today_ist - timedelta(days=1)).strftime('%Y-%m-%d')}), or just mentions a day, use {today_str} as the base reference.
+            
+            TASK: 
+            - If text is provided, parse the transactions.
+            - If an image is provided, SCAN it for: Total Amount, Date, Merchant/Description, and Items.
+            - If the image date is not found, use {today_str}.
             
             Return ONLY a JSON list: [{{'tab': '...', 'row': [...]}}].
             Headers:
@@ -65,25 +82,28 @@ if page == "Data Entry":
             try:
                 response = client.models.generate_content(
                     model="gemini-2.0-flash",
-                    contents=user_input,
+                    contents=contents, # This now sends both text AND image
                     config={"system_instruction": system_msg, "temperature": 0.1, "response_mime_type": "application/json"}
                 )
+                
                 data_entries = json.loads(response.text.strip())
                 
+                saved_count = 0
                 for entry in data_entries:
                     ss.worksheet(entry['tab']).append_row([str(x) for x in entry['row']])
+                    saved_count += 1
                 
-                st.success(f"✅ Successfully recorded for {today_str}!")
+                st.success(f"✅ Successfully recorded {saved_count} items!")
                 st.balloons()
             except Exception as e:
                 st.error(f"Error: {e}")
+        else:
+            st.warning("Please provide either text or an image.")
 
 # --- 5. PAGE: FINANCIAL INTELLIGENCE ---
 elif page == "Financial Intelligence":
     st.header("📊 Your Financial Cockpit")
     
-    # [Rest of the Dashboard logic remains exactly the same as previously fixed]
-    # (Including the specific header names for Type, Status, and Loans)
     def get_df(sheet_name):
         try:
             return pd.DataFrame(ss.worksheet(sheet_name).get_all_records())
@@ -94,6 +114,7 @@ elif page == "Financial Intelligence":
     friend_data = get_df("Friends_Debt")
     loan_data = get_df("Loans_and_Savings")
 
+    # Header Mapping
     COL_TYPE = "Type (Income/Expense)"
     COL_FRIEND_STATUS = "Status (Pending/Paid)"
     COL_LOAN_TARGET = "Target/Total Amount"
@@ -123,4 +144,4 @@ elif page == "Financial Intelligence":
             fig = px.pie(expenses, values='Amount', names='Category', hole=0.4)
             st.plotly_chart(fig, use_container_width=True)
     else:
-        st.warning("No data found or headers mismatch.")
+        st.warning("Dashboard waiting for data...")
